@@ -33,7 +33,7 @@
 
 static i2c_model *s_i2c_model = 0;
 
-static struct __attribute__((__packed__)) packet {
+struct __attribute__((__packed__)) packet {
   uint8_t address;
   int data;
 };
