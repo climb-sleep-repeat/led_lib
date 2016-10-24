@@ -1,5 +1,5 @@
 #include "i2cmodel.h"
-
+#include <unistd.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <linux/i2c-dev.h>
@@ -106,8 +106,8 @@ i2c_model * i2c_model_get_singleton(i2c_port port)
     else
       {
 	printf("invalid port number\n");
-	return NULL;
       }
+    return NULL;
 }
 
 int i2c_model_set_address(i2c_model *p_i2c_model, int address)

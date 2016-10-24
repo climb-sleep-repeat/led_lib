@@ -1,49 +1,70 @@
 #include "led.h"
 #include "i2cmodel.h"
+#include <stdio.h>
+#include <stdlib.h>
 
-#define DRIVER_0 Ox1100000
-#define DRIVER_1 Ox1100001
-#define DRIVER_2 Ox1100010
-#define DRIVER_3 Ox1100011
-#define DRIVER_4 Ox1100100
-#define DRIVER_5 Ox1100101
-#define DRIVER_6 Ox1100110
-#define DRIVER_7 Ox1100111
+#define DRIVER_0 0x1100000
+#define DRIVER_1 0x1100001
+#define DRIVER_2 0x1100010
+#define DRIVER_3 0x1100011
+#define DRIVER_4 0x1100100
+#define DRIVER_5 0x1100101
+#define DRIVER_6 0x1100110
+#define DRIVER_7 0x1100111
 #define DRIVER_8 0x1101000
 #define DRIVER_9 0x1101001
 
-#define PWM_0 Ox02
-#define PWM_1 Ox03
-#define PWM_2 Ox04
-#define PWM_3 Ox05
-#define PWM_4 Ox06
-#define PWM_5 Ox07
-#define PWM_6 Ox08
-#define PWM_7 Ox09
-#define PWM_8 Ox0A
-#define PWM_9 Ox0B
-#define PWM_10 Ox0C
-#define PWM_11 Ox0D
-#define PWM_12 Ox0E
-#define PWM_13 Ox0F
-#define PWM_14 Ox10
+#define PWM_0 0x01
+#define PWM_1 0x02
+#define PWM_2 0x03
+#define PWM_3 0x04
+#define PWM_4 0x05
+#define PWM_5 0x06
+#define PWM_6 0x07
+#define PWM_7 0x08
+#define PWM_8 0x09
+#define PWM_9 0x0A
+#define PWM_10 0x0B
+#define PWM_11 0x0C
+#define PWM_12 0x0D
+#define PWM_13 0x0E
+#define PWM_14 0x0F
+#define PWM_15 0x10
 
+static i2c_model *s_i2c_model = 0;
 
-static int led_get_address(int row, char column);
+static struct __attribute__((__packed__)) packet {
+  uint8_t address;
+  int data;
+};
+
+static int led_get_address_and_reg(int row, char column, int * address, int * reg);
+
+void led_init(){
+  s_i2c_model = (i2c_model *)malloc(sizeof(i2c_model));
+}
 
 int led_turn_on_off(int row, char column, bool on){
   int address,reg;
-  if(led_get_address(row, column, &address, &reg))
+  struct packet p;
+  if(led_get_address_and_reg(row, column, &address, &reg)){
     printf("led get address error\n");
+    return -1;
+  }
+  p.address = reg;
+  p.data = (int)on;
   
+  i2c_model_set_address(s_i2c_model, address);
+  i2c_model_write_data(s_i2c_model, &p, sizeof(struct packet));
+  return 0;
 }
 
 int led_set_brightness(int row, char column, float brightness){
-
+  return 0;
 }
 
 int led_set_brightness_all(float brightness){
-
+  return 0;
 }
 
 int led_get_address_and_reg(int row, char column, int * address, int * reg){
@@ -184,7 +205,6 @@ int led_get_address_and_reg(int row, char column, int * address, int * reg){
     }
     break;
   case 7:
- switch(column){
     switch(column){
     case 'b':
       *address=DRIVER_6;
@@ -729,6 +749,7 @@ int led_get_address_and_reg(int row, char column, int * address, int * reg){
     }
     break;
   default:
-    break;
+   break;
   }
+  return 0;
 }
