@@ -31,11 +31,13 @@
 #define PWM_14 0x0F
 #define PWM_15 0x10
 
+#define NO_AUTO_INC 0x00
+
 static i2c_model *s_i2c_model = 0;
 
 struct __attribute__((__packed__)) packet {
   uint8_t address;
-  int data;
+  uint8_t data;
 };
 
 static int led_get_address_and_reg(int row, char column, int * address, int * reg);
@@ -44,15 +46,21 @@ void led_init(){
   s_i2c_model = (i2c_model *)malloc(sizeof(i2c_model));
 }
 
+void led_quit(){
+  free(s_i2c_model);
+}
+
 int led_turn_on_off(int row, char column, bool on){
-  int address,reg;
+  uint8_t address,reg;
   struct packet p;
+
   if(led_get_address_and_reg(row, column, &address, &reg)){
     printf("led get address error\n");
     return -1;
   }
-  p.address = reg;
-  p.data = (int)on;
+
+  p.address = NO_AUTO_INC|reg;
+  p.data = (uint8_t)on|g_brightness;
   
   i2c_model_set_address(s_i2c_model, address);
   i2c_model_write_data(s_i2c_model, &p, sizeof(struct packet));
@@ -60,6 +68,9 @@ int led_turn_on_off(int row, char column, bool on){
 }
 
 int led_set_brightness(int row, char column, float brightness){
+  node * led = led(list, row,column);
+  led->brightness = (uint8_t)(256*brightness/100.0);
+  led_turn_on_off(row,column,true);
   return 0;
 }
 
