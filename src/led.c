@@ -3,16 +3,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define DRIVER_0 0x1100000
-#define DRIVER_1 0x1100001
-#define DRIVER_2 0x1100010
-#define DRIVER_3 0x1100011
-#define DRIVER_4 0x1100100
-#define DRIVER_5 0x1100101
-#define DRIVER_6 0x1100110
-#define DRIVER_7 0x1100111
-#define DRIVER_8 0x1101000
-#define DRIVER_9 0x1101001
+#define DRIVER_0 0b1100000
+#define DRIVER_1 0b1100001
+#define DRIVER_2 0b1100010
+#define DRIVER_3 0b1100011
+#define DRIVER_4 0b1100100
+#define DRIVER_5 0b1100101
+#define DRIVER_6 0b1100110
+#define DRIVER_7 0b1100111
+#define DRIVER_8 0b1101000
+#define DRIVER_9 0b1101001
 
 #define PWM_0 0x01
 #define PWM_1 0x02
@@ -32,15 +32,27 @@
 #define PWM_15 0x10
 
 #define NO_AUTO_INC 0x00
+#define MAX_LEDS 15
+#define DEFAULT_BRIGHTNESS 128
 
 static i2c_model *s_i2c_model = 0;
+struct led{
+  uint8_t brightness;
+  int row;
+  char column;
+  bool on;
+};
+
+static struct led *leds[MAX_LEDS] = {NULL};
 
 struct __attribute__((__packed__)) packet {
   uint8_t address;
   uint8_t data;
 };
 
-static int led_get_address_and_reg(int row, char column, int * address, int * reg);
+static struct led * find_led(int row, char column);
+static int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * reg);
+static struct led * new_led(int row, char column, uint8_t brightness);
 
 void led_init(){
   s_i2c_model = (i2c_model *)malloc(sizeof(i2c_model));
@@ -48,37 +60,79 @@ void led_init(){
 
 void led_quit(){
   free(s_i2c_model);
+  for(int i = 0;i<MAX_LEDS;i++){
+    if(leds[i])
+      free(leds[i]);
+    else
+      return;
+  }
 }
 
 int led_turn_on_off(int row, char column, bool on){
   uint8_t address,reg;
   struct packet p;
-
+  struct led * p_led = find_led(column, row);
+  if(p_led){
+    if(p_led->on == on){
+      return 1;
+    }
+  }
+  else{
+    p_led = new_led(row, column, DEFAULT_BRIGHTNESS);
+  }
   if(led_get_address_and_reg(row, column, &address, &reg)){
     printf("led get address error\n");
     return -1;
   }
 
-  p.address = NO_AUTO_INC|reg;
-  p.data = (uint8_t)on|g_brightness;
+  p.address = (NO_AUTO_INC|reg);
+  p.data = ((uint8_t)on|p_led->brightness);
   
   i2c_model_set_address(s_i2c_model, address);
   i2c_model_write_data(s_i2c_model, &p, sizeof(struct packet));
+  p_led->on = true;
   return 0;
 }
 
 int led_set_brightness(int row, char column, float brightness){
-  node * led = led(list, row,column);
-  led->brightness = (uint8_t)(256*brightness/100.0);
-  led_turn_on_off(row,column,true);
-  return 0;
+  struct led * p_led = find_led(row,column);
+  if(p_led){
+    p_led->brightness = (uint8_t)(256*brightness/100.0);
+    led_turn_on_off(row,column,true);
+    return 0;
+  }
+  else
+    return -1;
 }
 
 int led_set_brightness_all(float brightness){
   return 0;
 }
 
-int led_get_address_and_reg(int row, char column, int * address, int * reg){
+struct led * new_led(int row, char column, uint8_t brightness){
+  for(int i = 0;i<MAX_LEDS;i++){
+    if(leds[i] == NULL){
+      leds[i] = (struct led *)malloc(sizeof(struct led));
+      leds[i]->row = row;
+      leds[i]->column = column;
+      leds[i]->brightness = brightness;
+      leds[i]->on = false;
+    }
+  }
+  return NULL;
+}
+  
+struct led * find_led(int row, char column){
+  for(int i = 0;i<MAX_LEDS;i++){
+    if(leds[i] == NULL)
+      return NULL;
+    else if(leds[i]->row == row && leds[i]->column == column)
+      return leds[i];
+  }
+  return NULL;
+}
+
+int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * reg){
   switch(row){
   case 2:
     switch(column){
