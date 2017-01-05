@@ -1,148 +1,138 @@
 #include "led.h"
 #include "i2cmodel.h"
+
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stddef.h>
 
-#define DRIVER_0 0b1100000
-#define DRIVER_1 0b1100001
-#define DRIVER_2 0b1100010
-#define DRIVER_3 0b1100011
-#define DRIVER_4 0b1100100
-#define DRIVER_5 0b1100101
-#define DRIVER_6 0b1100110
-#define DRIVER_7 0b1100111
-#define DRIVER_8 0b1101000
-#define DRIVER_9 0b1101001
+#define ALL_CALL 0b1101000 
 
-#define PWM_0 0x01
-#define PWM_1 0x02
-#define PWM_2 0x03
-#define PWM_3 0x04
-#define PWM_4 0x05
-#define PWM_5 0x06
-#define PWM_6 0x07
-#define PWM_7 0x08
-#define PWM_8 0x09
-#define PWM_9 0x0A
-#define PWM_10 0x0B
-#define PWM_11 0x0C
-#define PWM_12 0x0D
-#define PWM_13 0x0E
-#define PWM_14 0x0F
-#define PWM_15 0x10
-
-#define NO_AUTO_INC 0x00
-#define MAX_LEDS 15
+#define MODE_1 0x00
+#define CONFIG 0xA1
+#define AUTO_INC 0xA0
+#define PWM_0 0x02
+#define MAX_LEDS 25
+#define NUM_DRIVERS 10
+#define NUM_LEDS_PER_DRIVER 16
 #define DEFAULT_BRIGHTNESS 128
 
+static uint8_t led_driver_address[] = {0b1100000, 0b1100001, 0b1100010, 0b1100011, 0b1100100, 0b1100101, 0b1100110, 0b1100111, 0b1101001, 0b1101010};
 static i2c_model *s_i2c_model = 0;
-struct led{
-  uint8_t brightness;
-  int row;
-  char column;
-  bool on;
+
+struct led_driver{
+  uint8_t led_brightness[NUM_LEDS_PER_DRIVER];
 };
 
-static struct led *leds[MAX_LEDS] = {NULL};
+static struct led_driver driver[NUM_DRIVERS];
 
-struct __attribute__((__packed__)) packet {
-  uint8_t address;
+struct __attribute__((__packed__)) command {
+  uint8_t reg;
   uint8_t data;
 };
 
-static struct led * find_led(int row, char column);
-static int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * reg);
-static struct led * new_led(int row, char column, uint8_t brightness);
+struct __attribute__((__packed__)) packet{
+  uint8_t reg;
+  uint8_t data[16];
+};
 
-void led_init(){
+static int led_get_driver_and_pwm_indices(int row, char column, uint8_t * driver_index, uint8_t * pwm_index);
+
+int led_init(){
   s_i2c_model = (i2c_model *)malloc(sizeof(i2c_model));
-}
+  i2c_model_set_singleton(s_i2c_model, i2c_1);
 
-void led_quit(){
-  free(s_i2c_model);
-  for(int i = 0;i<MAX_LEDS;i++){
-    if(leds[i])
-      free(leds[i]);
-    else
-      return;
-  }
-}
+  i2c_model_init(s_i2c_model);
+  uint8_t address = ALL_CALL;
+  struct command c;
 
-int led_turn_on_off(int row, char column, bool on){
-  uint8_t address,reg;
-  struct packet p;
-  struct led * p_led = find_led(column, row);
-  if(p_led){
-    if(p_led->on == on){
-      return 1;
-    }
-  }
-  else{
-    p_led = new_led(row, column, DEFAULT_BRIGHTNESS);
-  }
-  if(led_get_address_and_reg(row, column, &address, &reg)){
-    printf("led get address error\n");
+  c.reg = MODE_1;
+  c.data = CONFIG;	
+
+  if(i2c_model_set_address(s_i2c_model, address)==-1){
+    printf("set address error\n");
     return -1;
   }
 
-  p.address = (NO_AUTO_INC|reg);
-  p.data = ((uint8_t)on|p_led->brightness);
-  
-  i2c_model_set_address(s_i2c_model, address);
-  i2c_model_write_data(s_i2c_model, &p, sizeof(struct packet));
-  p_led->on = true;
-  return 0;
+  if(i2c_model_write_data(s_i2c_model, &c, sizeof(struct command))==-1){
+    printf("write data error");
+    return -1;
+  }
+  sleep(1);  
+//setup ledout registers.
+
+  c.reg = 0x14;
+  c.data = 0xAA;
+
+  if(i2c_model_write_data(s_i2c_model, &c, sizeof(struct command))==-1){
+    printf("write data error");
+    return -1;
+  }
+ c.reg = 0x15;
+ c.data = 0xAA;
+  if(i2c_model_write_data(s_i2c_model, &c, sizeof(struct command))==-1){
+    printf("write data error");
+    return -1;
+  }
+ c.reg = 0x16;
+ c.data = 0xAA;
+  if(i2c_model_write_data(s_i2c_model, &c, sizeof(struct command))==-1){
+    printf("write data error");
+    return -1;
+  }
+ c.reg = 0x17;
+ c.data = 0xAA;
+
+  if(i2c_model_write_data(s_i2c_model, &c, sizeof(struct command))==-1){
+    printf("write data error");
+    return -1;
+  }
+return 0;
 }
 
-int led_set_brightness(int row, char column, float brightness){
-  struct led * p_led = find_led(row,column);
-  if(p_led){
-    p_led->brightness = (uint8_t)(256*brightness/100.0);
-    led_turn_on_off(row,column,true);
+int add_led_to_list_with_brightness(int row, char column, uint8_t brightness){
+  uint8_t driver_index;
+  uint8_t pwm_index;
+  if(led_get_driver_and_pwm_indices(row, column, &driver_index, &pwm_index)==0){
+    driver[driver_index].led_brightness[pwm_index] = brightness;
     return 0;
   }
-  else
-    return -1;
+  return -1;
 }
 
-int led_set_brightness_all(float brightness){
+void clear_led_list(){
+  memset(driver, 0, sizeof(struct led_driver));
+}
+
+int led_apply_values_to_driver(){
+  for(int i = 0; i<NUM_DRIVERS; i++){
+    if(i2c_model_set_address(s_i2c_model, led_driver_address[i])==-1){
+      printf("set address error\n");
+      return -1;
+    }
+    struct packet p;
+    p.reg = AUTO_INC|PWM_0;
+    memcpy(&p.data, &driver[i].led_brightness, NUM_LEDS_PER_DRIVER*sizeof(uint8_t));
+    if(i2c_model_write_data(s_i2c_model, &p, sizeof(struct packet))==-1){
+      printf("write data error");
+      return -1;
+    }  
+  }
   return 0;
 }
 
-struct led * new_led(int row, char column, uint8_t brightness){
-  for(int i = 0;i<MAX_LEDS;i++){
-    if(leds[i] == NULL){
-      leds[i] = (struct led *)malloc(sizeof(struct led));
-      leds[i]->row = row;
-      leds[i]->column = column;
-      leds[i]->brightness = brightness;
-      leds[i]->on = false;
-    }
-  }
-  return NULL;
-}
-  
-struct led * find_led(int row, char column){
-  for(int i = 0;i<MAX_LEDS;i++){
-    if(leds[i] == NULL)
-      return NULL;
-    else if(leds[i]->row == row && leds[i]->column == column)
-      return leds[i];
-  }
-  return NULL;
-}
-
-int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * reg){
+int led_get_driver_and_pwm_indices(int row, char column, uint8_t * driver_index, uint8_t * pwm_index){
   switch(row){
   case 2:
     switch(column){
     case 'g':
-      *address=DRIVER_9;
-      *reg = PWM_6;
+      *driver_index= 9;
+      *pwm_index =  6;
       break;
     case 'j':
-      *address=DRIVER_9;
-      *reg = PWM_7;
+      *driver_index= 9;
+      *pwm_index =  7;
       break;
     default:
       printf("invalid hold\n");
@@ -152,12 +142,12 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 3:
     switch(column){
     case 'b':
-      *address=DRIVER_8;
-      *reg = PWM_5;
+      *driver_index= 8;
+      *pwm_index =  5;
       break;
     case 'd':
-      *address=DRIVER_8;
-      *reg = PWM_6;
+      *driver_index= 8;
+      *pwm_index =  6;
       break;
     default:
       printf("invalid hold\n");
@@ -167,16 +157,16 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 4:
     switch(column){
     case 'b':
-      *address=DRIVER_8;
-      *reg = PWM_4;
+      *driver_index= 8;
+      *pwm_index =  4;
       break;
     case 'g':
-      *address=DRIVER_9;
-      *reg = PWM_4;
+      *driver_index= 9;
+      *pwm_index =  4;
       break;
     case 'i':
-      *address=DRIVER_9;
-      *reg = PWM_5;
+      *driver_index= 9;
+      *pwm_index =  5;
       break;
     default:
       printf("invalid hold\n");
@@ -186,36 +176,36 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 5:
     switch(column){
     case 'a':
-      *address=DRIVER_8;
-      *reg = PWM_0;
+      *driver_index= 8;
+      *pwm_index =  0;
       break;
     case 'c':
-      *address=DRIVER_8;
-      *reg = PWM_1;
+      *driver_index= 8;
+      *pwm_index =  1;
       break;
     case 'd':
-      *address=DRIVER_8;
-      *reg = PWM_2;
+      *driver_index= 8;
+      *pwm_index =  2;
       break;
     case 'f':
-      *address=DRIVER_8;
-      *reg = PWM_3;
+      *driver_index= 8;
+      *pwm_index =  3;
       break;
     case 'h':
-      *address=DRIVER_9;
-      *reg = PWM_0;
+      *driver_index= 9;
+      *pwm_index =  0;
       break;
     case 'i':
-      *address=DRIVER_9;
-      *reg = PWM_1;
+      *driver_index= 9;
+      *pwm_index =  1;
       break;
     case 'j':
-      *address=DRIVER_9;
-      *reg = PWM_2;
+      *driver_index= 9;
+      *pwm_index =  2;
       break;
     case 'k':
-      *address=DRIVER_9;
-      *reg = PWM_3;
+      *driver_index= 9;
+      *pwm_index =  3;
       break;
     default:
       printf("invalid hold\n");
@@ -225,44 +215,44 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 6:
     switch(column){
     case 'b':
-      *address=DRIVER_6;
-      *reg = PWM_10;
+      *driver_index= 6;
+      *pwm_index =  10;
       break;
     case 'c':
-      *address=DRIVER_6;
-      *reg = PWM_11;
+      *driver_index= 6;
+      *pwm_index =  11;
       break;
     case 'd':
-      *address=DRIVER_6;
-      *reg = PWM_12;
+      *driver_index= 6;
+      *pwm_index =  12;
       break;
     case 'e':
-      *address=DRIVER_6;
-      *reg = PWM_13;
+      *driver_index= 6;
+      *pwm_index =  13;
       break;
     case 'f':
-      *address=DRIVER_6;
-      *reg = PWM_14;
+      *driver_index= 6;
+      *pwm_index =  14;
       break;
     case 'g':
-      *address=DRIVER_7;
-      *reg = PWM_11;
+      *driver_index= 7;
+      *pwm_index =  11;
       break;
     case 'h':
-      *address=DRIVER_7;
-      *reg = PWM_12;
+      *driver_index= 7;
+      *pwm_index =  12;
       break;
     case 'i':
-      *address=DRIVER_7;
-      *reg = PWM_13;
+      *driver_index= 7;
+      *pwm_index =  13;
       break;
     case 'j':
-      *address=DRIVER_7;
-      *reg = PWM_14;
+      *driver_index= 7;
+      *pwm_index =  14;
       break;
     case 'k':
-      *address=DRIVER_7;
-      *reg = PWM_15;
+      *driver_index= 7;
+      *pwm_index =  15;
       break;
     default:
       printf("invalid hold\n");
@@ -272,44 +262,44 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 7:
     switch(column){
     case 'b':
-      *address=DRIVER_6;
-      *reg = PWM_5;
+      *driver_index= 6;
+      *pwm_index =  5;
       break;
     case 'c':
-      *address=DRIVER_6;
-      *reg = PWM_6;
+      *driver_index= 6;
+      *pwm_index =  6;
       break;
     case 'd':
-      *address=DRIVER_6;
-      *reg = PWM_7;
+      *driver_index= 6;
+      *pwm_index =  7;
       break;
     case 'e':
-      *address=DRIVER_6;
-      *reg = PWM_8;
+      *driver_index= 6;
+      *pwm_index =  8;
       break;
     case 'f':
-      *address=DRIVER_6;
-      *reg = PWM_9;
+      *driver_index= 6;
+      *pwm_index =  9;
       break;
     case 'g':
-      *address=DRIVER_7;
-      *reg = PWM_6;
+      *driver_index= 7;
+      *pwm_index =  6;
       break;
     case 'h':
-      *address=DRIVER_7;
-      *reg = PWM_7;
+      *driver_index= 7;
+      *pwm_index =  7;
       break;
     case 'i':
-      *address=DRIVER_7;
-      *reg = PWM_8;
+      *driver_index= 7;
+      *pwm_index =  8;
       break;
     case 'j':
-      *address=DRIVER_7;
-      *reg = PWM_9;
+      *driver_index= 7;
+      *pwm_index =  9;
       break;
     case 'k':
-      *address=DRIVER_7;
-      *reg = PWM_10;
+      *driver_index= 7;
+      *pwm_index =  10;
       break;
     default:
       printf("invalid hold\n");
@@ -319,44 +309,44 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 8:
     switch(column){
     case 'b':
-      *address=DRIVER_6;
-      *reg = PWM_0;
+      *driver_index= 6;
+      *pwm_index =  0;
       break;
     case 'c':
-      *address=DRIVER_6;
-      *reg = PWM_1;
+      *driver_index= 6;
+      *pwm_index =  1;
       break;
     case 'd':
-      *address=DRIVER_6;
-      *reg = PWM_2;
+      *driver_index= 6;
+      *pwm_index =  2;
       break;
     case 'e':
-      *address=DRIVER_6;
-      *reg = PWM_3;
+      *driver_index= 6;
+      *pwm_index =  3;
       break;
     case 'f':
-      *address=DRIVER_6;
-      *reg = PWM_4;
+      *driver_index= 6;
+      *pwm_index =  4;
       break;
     case 'g':
-      *address=DRIVER_7;
-      *reg = PWM_1;
+      *driver_index= 7;
+      *pwm_index =  1;
       break;
     case 'h':
-      *address=DRIVER_7;
-      *reg = PWM_2;
+      *driver_index= 7;
+      *pwm_index =  2;
       break;
     case 'i':
-      *address=DRIVER_7;
-      *reg = PWM_3;
+      *driver_index= 7;
+      *pwm_index =  3;
       break;
     case 'j':
-      *address=DRIVER_7;
-      *reg = PWM_4;
+      *driver_index= 7;
+      *pwm_index =  4;
       break;
     case 'k':
-      *address=DRIVER_7;
-      *reg = PWM_5;
+      *driver_index= 7;
+      *pwm_index =  5;
       break;
     default:
       printf("invalid hold\n");
@@ -366,48 +356,48 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 9:
     switch(column){
     case 'a':
-      *address=DRIVER_4;
-      *reg = PWM_11;
+      *driver_index= 4;
+      *pwm_index =  11;
       break;
     case 'b':
-      *address=DRIVER_4;
-      *reg = PWM_12;
+      *driver_index= 4;
+      *pwm_index =  12;
       break;
     case 'c':
-      *address=DRIVER_4;
-      *reg = PWM_13;
+      *driver_index= 4;
+      *pwm_index =  13;
       break;
     case 'd':
-      *address=DRIVER_4;
-      *reg = PWM_14;
+      *driver_index= 4;
+      *pwm_index =  14;
       break;
     case 'e':
-      *address=DRIVER_4;
-      *reg = PWM_15;
+      *driver_index= 4;
+      *pwm_index =  15;
       break;
     case 'f':
-      *address=DRIVER_5;
-      *reg = PWM_11;
+      *driver_index= 5;
+      *pwm_index =  11;
       break;
     case 'g':
-      *address=DRIVER_5;
-      *reg = PWM_12;
+      *driver_index= 5;
+      *pwm_index =  12;
       break;
     case 'h':
-      *address=DRIVER_5;
-      *reg = PWM_13;
+      *driver_index= 5;
+      *pwm_index =  13;
       break;
     case 'i':
-      *address=DRIVER_5;
-      *reg = PWM_14;
+      *driver_index= 5;
+      *pwm_index =  14;
       break;
     case 'j':
-      *address=DRIVER_5;
-      *reg = PWM_15;
+      *driver_index= 5;
+      *pwm_index =  15;
       break;
     case 'k':
-      *address=DRIVER_7;
-      *reg = PWM_0;
+      *driver_index= 7;
+      *pwm_index =  0;
       break;
     default:
       printf("invalid hold\n");
@@ -417,48 +407,48 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 10:
     switch(column){
     case 'a':
-      *address=DRIVER_4;
-      *reg = PWM_6;
+      *driver_index= 4;
+      *pwm_index =  6;
       break;
     case 'b':
-      *address=DRIVER_4;
-      *reg = PWM_7;
+      *driver_index= 4;
+      *pwm_index =  7;
       break;
     case 'c':
-      *address=DRIVER_4;
-      *reg = PWM_8;
+      *driver_index= 4;
+      *pwm_index =  8;
       break;
     case 'd':
-      *address=DRIVER_4;
-      *reg = PWM_9;
+      *driver_index= 4;
+      *pwm_index =  9;
       break;
     case 'e':
-      *address=DRIVER_4;
-      *reg = PWM_10;
+      *driver_index= 4;
+      *pwm_index =  10;
       break;
     case 'f':
-      *address=DRIVER_5;
-      *reg = PWM_5;
+      *driver_index= 5;
+      *pwm_index =  5;
       break;
     case 'g':
-      *address=DRIVER_5;
-      *reg = PWM_6;
+      *driver_index= 5;
+      *pwm_index =  6;
       break;
     case 'h':
-      *address=DRIVER_5;
-      *reg = PWM_7;
+      *driver_index= 5;
+      *pwm_index =  7;
       break;
     case 'i':
-      *address=DRIVER_5;
-      *reg = PWM_8;
+      *driver_index= 5;
+      *pwm_index =  8;
       break;
     case 'j':
-      *address=DRIVER_5;
-      *reg = PWM_9;
+      *driver_index= 5;
+      *pwm_index =  9;
       break;
     case 'k':
-      *address=DRIVER_5;
-      *reg = PWM_10;
+      *driver_index= 5;
+      *pwm_index =  10;
       break;
     default:
       printf("invalid hold\n");
@@ -468,48 +458,48 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 11:
     switch(column){
     case 'a':
-      *address=DRIVER_4;
-      *reg = PWM_0;
+      *driver_index= 4;
+      *pwm_index =  0;
       break;
     case 'b':
-      *address=DRIVER_4;
-      *reg = PWM_1;
+      *driver_index= 4;
+      *pwm_index =  1;
       break;
     case 'c':
-      *address=DRIVER_4;
-      *reg = PWM_2;
+      *driver_index= 4;
+      *pwm_index =  2;
       break;
     case 'd':
-      *address=DRIVER_4;
-      *reg = PWM_3;
+      *driver_index= 4;
+      *pwm_index =  3;
       break;
     case 'e':
-      *address=DRIVER_4;
-      *reg = PWM_4;
+      *driver_index= 4;
+      *pwm_index =  4;
       break;
     case 'f':
-      *address=DRIVER_4;
-      *reg = PWM_5;
+      *driver_index= 4;
+      *pwm_index =  5;
       break;
     case 'g':
-      *address=DRIVER_5;
-      *reg = PWM_0;
+      *driver_index= 5;
+      *pwm_index =  0;
       break;
     case 'h':
-      *address=DRIVER_5;
-      *reg = PWM_1;
+      *driver_index= 5;
+      *pwm_index =  1;
       break;
     case 'i':
-      *address=DRIVER_5;
-      *reg = PWM_2;
+      *driver_index= 5;
+      *pwm_index =  2;
       break;
     case 'j':
-      *address=DRIVER_5;
-      *reg = PWM_3;
+      *driver_index= 5;
+      *pwm_index =  3;
       break;
     case 'k':
-      *address=DRIVER_5;
-      *reg = PWM_4;
+      *driver_index= 5;
+      *pwm_index =  4;
       break;
     default:
       printf("invalid hold\n");
@@ -519,48 +509,48 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 12:
     switch(column){
     case 'a':
-      *address=DRIVER_2;
-      *reg = PWM_11;
+      *driver_index= 2;
+      *pwm_index =  11;
       break;
     case 'b':
-      *address=DRIVER_2;
-      *reg = PWM_12;
+      *driver_index= 2;
+      *pwm_index =  12;
       break;
     case 'c':
-      *address=DRIVER_2;
-      *reg = PWM_13;
+      *driver_index= 2;
+      *pwm_index =  13;
       break;
     case 'd':
-      *address=DRIVER_2;
-      *reg = PWM_14;
+      *driver_index= 2;
+      *pwm_index =  14;
       break;
     case 'e':
-      *address=DRIVER_2;
-      *reg = PWM_15;
+      *driver_index= 2;
+      *pwm_index =  15;
       break;
     case 'f':
-      *address=DRIVER_2;
-      *reg = PWM_10;
+      *driver_index= 2;
+      *pwm_index =  10;
       break;
     case 'g':
-      *address=DRIVER_3;
-      *reg = PWM_11;
+      *driver_index= 3;
+      *pwm_index =  11;
       break;
     case 'h':
-      *address=DRIVER_3;
-      *reg = PWM_12;
+      *driver_index= 3;
+      *pwm_index =  12;
       break;
     case 'i':
-      *address=DRIVER_3;
-      *reg = PWM_13;
+      *driver_index= 3;
+      *pwm_index =  13;
       break;
     case 'j':
-      *address=DRIVER_3;
-      *reg = PWM_14;
+      *driver_index= 3;
+      *pwm_index =  14;
       break;
     case 'k':
-      *address=DRIVER_3;
-      *reg = PWM_15;
+      *driver_index= 3;
+      *pwm_index =  15;
       break;
     default:
       printf("invalid hold\n");
@@ -570,48 +560,48 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 13:
     switch(column){
     case 'a':
-      *address=DRIVER_2;
-      *reg = PWM_5;
+      *driver_index= 2;
+      *pwm_index =  5;
       break;
     case 'b':
-      *address=DRIVER_2;
-      *reg = PWM_6;
+      *driver_index= 2;
+      *pwm_index =  6;
       break;
     case 'c':
-      *address=DRIVER_2;
-      *reg = PWM_7;
+      *driver_index= 2;
+      *pwm_index =  7;
       break;
     case 'd':
-      *address=DRIVER_2;
-      *reg = PWM_8;
+      *driver_index= 2;
+      *pwm_index =  8;
       break;
     case 'e':
-      *address=DRIVER_2;
-      *reg = PWM_9;
+      *driver_index= 2;
+      *pwm_index =  9;
       break;
     case 'f':
-      *address=DRIVER_2;
-      *reg = PWM_10;
+      *driver_index= 2;
+      *pwm_index =  10;
       break;
     case 'g':
-      *address=DRIVER_3;
-      *reg = PWM_5;
+      *driver_index= 3;
+      *pwm_index =  5;
       break;
     case 'h':
-      *address=DRIVER_3;
-      *reg = PWM_6;
+      *driver_index= 3;
+      *pwm_index =  6;
       break;
     case 'i':
-      *address=DRIVER_3;
-      *reg = PWM_7;
+      *driver_index= 3;
+      *pwm_index =  7;
       break;
     case 'j':
-      *address=DRIVER_3;
-      *reg = PWM_8;
+      *driver_index= 3;
+      *pwm_index =  8;
       break;
     case 'k':
-      *address=DRIVER_3;
-      *reg = PWM_9;
+      *driver_index= 3;
+      *pwm_index =  9;
       break;
     default:
       printf("invalid hold\n");
@@ -621,44 +611,44 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 14:
     switch(column){
     case 'a':
-      *address=DRIVER_2;
-      *reg = PWM_0;
+      *driver_index= 2;
+      *pwm_index =  0;
       break;
     case 'c':
-      *address=DRIVER_2;
-      *reg = PWM_1;
+      *driver_index= 2;
+      *pwm_index =  1;
       break;
     case 'd':
-      *address=DRIVER_2;
-      *reg = PWM_2;
+      *driver_index= 2;
+      *pwm_index =  2;
       break;
     case 'e':
-      *address=DRIVER_2;
-      *reg = PWM_3;
+      *driver_index= 2;
+      *pwm_index =  3;
       break;
     case 'f':
-      *address=DRIVER_2;
-      *reg = PWM_4;
+      *driver_index= 2;
+      *pwm_index =  4;
       break;
     case 'g':
-      *address=DRIVER_3;
-      *reg = PWM_0;
+      *driver_index= 3;
+      *pwm_index =  0;
       break;
     case 'h':
-      *address=DRIVER_3;
-      *reg = PWM_1;
+      *driver_index= 3;
+      *pwm_index =  1;
       break;
     case 'i':
-      *address=DRIVER_3;
-      *reg = PWM_2;
+      *driver_index= 3;
+      *pwm_index =  2;
       break;
     case 'j':
-      *address=DRIVER_3;
-      *reg = PWM_3;
+      *driver_index= 3;
+      *pwm_index =  3;
       break;
     case 'k':
-      *address=DRIVER_3;
-      *reg = PWM_4;
+      *driver_index= 3;
+      *pwm_index =  4;
       break;
     default:
       printf("invalid hold\n");
@@ -668,36 +658,36 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 15:
     switch(column){
     case 'a':
-      *address=DRIVER_0;
-      *reg = PWM_11;
+      *driver_index= 0;
+      *pwm_index =  11;
       break;
     case 'b':
-      *address=DRIVER_0;
-      *reg = PWM_12;
+      *driver_index= 0;
+      *pwm_index =  12;
       break;
     case 'c':
-      *address=DRIVER_0;
-      *reg = PWM_13;
+      *driver_index= 0;
+      *pwm_index =  13;
       break;
     case 'd':
-      *address=DRIVER_0;
-      *reg = PWM_14;
+      *driver_index= 0;
+      *pwm_index =  14;
       break;
     case 'e':
-      *address=DRIVER_1;
-      *reg = PWM_11;
+      *driver_index= 1;
+      *pwm_index =  11;
       break;
     case 'f':
-      *address=DRIVER_1;
-      *reg = PWM_12;
+      *driver_index= 1;
+      *pwm_index =  12;
       break;
     case 'g':
-      *address=DRIVER_1;
-      *reg = PWM_13;
+      *driver_index= 1;
+      *pwm_index =  13;
       break;
     case 'i':
-      *address=DRIVER_0;
-      *reg = PWM_14;
+      *driver_index= 1;
+      *pwm_index =  14;
       break;
     default:
       printf("invalid hold\n");
@@ -707,48 +697,48 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 16:
     switch(column){
     case 'a':
-      *address=DRIVER_0;
-      *reg = PWM_6;
+      *driver_index= 0;
+      *pwm_index =  6;
       break;
     case 'b':
-      *address=DRIVER_0;
-      *reg = PWM_7;
+      *driver_index= 0;
+      *pwm_index =  7;
       break;
     case 'c':
-      *address=DRIVER_0;
-      *reg = PWM_8;
+      *driver_index= 0;
+      *pwm_index =  8;
       break;
     case 'd':
-      *address=DRIVER_0;
-      *reg = PWM_9;
+      *driver_index= 0;
+      *pwm_index =  9;
       break;
     case 'e':
-      *address=DRIVER_0;
-      *reg = PWM_10;
+      *driver_index= 0;
+      *pwm_index =  10;
       break;
     case 'f':
-      *address=DRIVER_1;
-      *reg = PWM_5;
+      *driver_index= 1;
+      *pwm_index =  5;
       break;
     case 'g':
-      *address=DRIVER_1;
-      *reg = PWM_6;
+      *driver_index= 1;
+      *pwm_index =  6;
       break;
     case 'h':
-      *address=DRIVER_1;
-      *reg = PWM_7;
+      *driver_index= 1;
+      *pwm_index =  7;
       break;
     case 'i':
-      *address=DRIVER_0;
-      *reg = PWM_8;
+      *driver_index= 1;
+      *pwm_index =  8;
       break;
     case 'j':
-      *address=DRIVER_0;
-      *reg = PWM_9;
+      *driver_index= 1;
+      *pwm_index =  9;
       break;
     case 'k':
-      *address=DRIVER_0;
-      *reg = PWM_10;
+      *driver_index= 1;
+      *pwm_index =  10;
       break;
     default:
       printf("invalid hold\n");
@@ -758,12 +748,12 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 17:
     switch(column){
     case 'd':
-      *address=DRIVER_0;
-      *reg = PWM_5;
+      *driver_index= 0;
+      *pwm_index =  5;
       break;
     case 'g':
-      *address=DRIVER_1;
-      *reg = PWM_4;
+      *driver_index= 1;
+      *pwm_index =  4;
       break;
     default:
       printf("invalid hold\n");
@@ -773,40 +763,40 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
   case 18:
     switch(column){
     case 'a':
-      *address=DRIVER_0;
-      *reg = PWM_0;
+      *driver_index= 0;
+      *pwm_index =  0;
       break;
     case 'b':
-      *address=DRIVER_0;
-      *reg = PWM_1;
+      *driver_index= 0;
+      *pwm_index =  1;
       break;
     case 'c':
-      *address=DRIVER_0;
-      *reg = PWM_2;
+      *driver_index= 0;
+      *pwm_index =  2;
       break;
     case 'd':
-      *address=DRIVER_0;
-      *reg = PWM_3;
+      *driver_index= 0;
+      *pwm_index =  3;
       break;
     case 'e':
-      *address=DRIVER_0;
-      *reg = PWM_4;
+      *driver_index= 0;
+      *pwm_index =  4;
       break;
     case 'g':
-      *address=DRIVER_1;
-      *reg = PWM_0;
+      *driver_index= 1;
+      *pwm_index =  0;
       break;
     case 'h':
-      *address=DRIVER_1;
-      *reg = PWM_1;
+      *driver_index= 1;
+      *pwm_index =  1;
       break;
     case 'i':
-      *address=DRIVER_0;
-      *reg = PWM_2;
+      *driver_index= 1;
+      *pwm_index =  2;
       break;
     case 'k':
-      *address=DRIVER_0;
-      *reg = PWM_3;
+      *driver_index= 1;
+      *pwm_index =  3;
       break;
     default:
       printf("invalid hold\n");
@@ -814,7 +804,9 @@ int led_get_address_and_reg(int row, char column, uint8_t * address, uint8_t * r
     }
     break;
   default:
-   break;
+    printf("invalid column\n");
+    return -1;
+    break;
   }
   return 0;
 }

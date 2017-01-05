@@ -3,11 +3,9 @@ SDIR = src
 ODIR = obj
 LDIR = lib
 
-CC = gcc # C compiler
-
-CFLAGS = -fPIC -Wall -I$(IDIR) # C flags
+CFLAGS = -std=c99 -fPIC -Wall -I$(IDIR) # C flags
 LDFLAGS = -shared  # linking flags
-TARGET_LIB = led.so
+TARGET_LIB = libled.so
 
 _OBJ = i2cmodel.o led.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
@@ -16,10 +14,10 @@ OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 all: $(LDIR)/$(TARGET_LIB)
 
 $(ODIR)/%.o: $(SDIR)/%.c
-	$(CC) -c -o $@ $< $(CFLAGS)
+	gcc -c -o $@ $< $(CFLAGS)
 
 $(LDIR)/$(TARGET_LIB): $(OBJ)
-	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)	
+	gcc -o $@ $^ $(LDFLAGS) $(CFLAGS)	
 
 .PHONY: clean
 clean:
